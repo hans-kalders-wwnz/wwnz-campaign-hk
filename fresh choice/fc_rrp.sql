@@ -214,81 +214,77 @@ cte_cd_current_shelf AS
 -- deprecated 16/06/23
 -- for instances when products are on great price this is returning the great price instead of the shelf price
 -- 
+-- 2025-12-17 Updated from gcp-wow-food-de-pel-prod.datamart to New data sources
 cte_cd_current_recommended_retail AS
 (
-  SELECT
-  article_id,
-  pack_size,
-  unit_of_measure,
-  cd_retail_price,  
-  cnt
-  
-    
-  FROM
+SELECT
+    article_id,
+    pack_size,
+    unit_of_measure,
+    cd_retail_price,
+    cnt
+FROM
     (
-      SELECT
-      article_id,
-      pack_size,
-      unit_of_measure,
-      cd_retail_price,  
-      cnt,
-      ROW_NUMBER() OVER(PARTITION BY article_id ORDER BY cnt DESC) row_num   -- Need to partition by most frequent promotion
+        SELECT
+            article_id,
+            pack_size,
+            unit_of_measure,
+            cd_retail_price,
+            cnt,
+            -- REVISED ROW_NUMBER LOGIC:
+            -- 1. Order by count (frequency) DESC
+            -- 2. As a tie-breaker, order by the most recent DateSellPriceStart DESC
+            ROW_NUMBER() OVER(
+                PARTITION BY article_id, unit_of_measure 
+                ORDER BY 
+                    -- cnt DESC,                            -- Most frequent price
+                    DateSellPriceStart DESC    ,            -- Tie-breaker: Most recent price start date
+                    cnt DESC                                -- Most frequent price by store count
 
-      FROM
-          (
-              SELECT
-                                    article_id,
-                                    pack_size,
-                                    unit_of_measure,
 
-              p.value     as        cd_retail_price,
-              p.count as            cnt,
-              
-              FROM
-              (
-                    SELECT                                                  article_id,
-                                                                          u.pack_size,
-                                                                          u.unit_of_measure,
-
-                        APPROX_TOP_COUNT(IFNULL(standard_price,retail_price), 1)                 most_freq_price,                              -- removes occasional store specific pricing
-
-                    FROM `gcp-wow-food-de-pel-prod.datamart.store_article_detail` AS sa
-                      INNER JOIN `gcp-wow-food-de-pel-prod.datamart.store` AS s
-                        USING(store_id)
-                      LEFT JOIN `gcp-wow-food-de-pel-prod.datamart.article` as a
-                        USING(article_id), UNNEST(a.uom) u          
-                      WHERE (sa.is_article_life_cycle_new IS TRUE OR sa.is_article_life_cycle_ranged IS TRUE)
-                        AND s.is_countdown_metro_store IS FALSE                                                          -- exclude metro stores
-                        AND s.is_countdown_neighbourhood_store IS FALSE                                                  -- exclude neighborhood stores   
-                        AND sa.is_store_active IS TRUE                                                                   -- Removes stores prefeix with 'New - '
-                        AND sa.financial_week_end_date= IF(
-                                          "Mon"=FORMAT_DATE("%a",CURRENT_DATE("NZ") ),                        -- Today is Monday Last Week Price
-                                            DATE_ADD(DATE_TRUNC(CURRENT_DATE("NZ"), week) , INTERVAL 0 week)  -- Last Week
-                                            ,DATE_ADD(DATE_TRUNC(CURRENT_DATE("NZ"), week) , INTERVAL 1 week) -- Current Week
-                                                          )
-                        AND sa.uom=u.unit_of_measure                                                                     -- Selling Unit of Measure 
-                        AND sa.category_description NOT IN (
-                                  'CIGARETTES',
-                                  'FRONT OF STORE OTHER',
-                                  'SEASONAL FOODS',
-                                  'NEWSAGENCY',
-                                  'ELECTRONIC  CIGARETTES',
-                                  'SMOKING ACCESSORIES',
-                                  'STATIONERY-CARDS & WRAP',
-                                  'STATIONERY-NZ POST',
-                                  'STATIONERY-SEASONAL STATIONERY')
-                        AND sa.district_id IN ("UNI","LNI")
-
-                        -- AND sa.article_id="266966"
-                    GROUP BY 1,2,3
-              )
-
-              CROSS JOIN UNNEST(most_freq_price) AS p
-          )
+            ) AS row_num
+        FROM
+            (
+                SELECT
+                    a.Article AS article_id,
+                    u.pack_size,
+                    a.UoM AS unit_of_measure,
+                    IF(a.PriceSpecificationElementTypeCode = 'VKP0', a.CurrentSellPrice,a.CurrentSellPrice) AS cd_retail_price, -- VKP0 Is standard price, when standard doesn't exist return non-standard off promo price
+                    a.DateSellPriceStart,                 -- Include the date field
+                    -- a.start_dttm     ,                   
+                    COUNT(a.CurrentSellPrice) AS cnt
+                FROM
+                    `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_site_uom_v` AS a
+                INNER JOIN
+                    `gcp-wow-cd-data-engine-prod.consume_store.dim__store` AS b
+                    ON a.site = b.store_id
+                INNER JOIN
+                    `gcp-wow-cd-data-engine-prod.consume_product_and_pricing.dim__article_hierarchy` AS c
+                    ON a.article = c.article_id
+                INNER JOIN
+                    `gcp-wow-cd-data-engine-prod.consume_product_and_pricing.dim__article_uom` AS u
+                    ON a.article = u.article_id AND a.UoM = u.unit_of_measure_id
+                WHERE
+                    1=1
+                    AND a.SalesOrganisation = '2010'  -- Woolworths NZ
+                    -- AND a.article = '503482' -- Retaining filter for testing                    
+                    AND b.is_countdown_metro_store IS FALSE -- Exclude Metro Pricing
+                    AND b.is_countdown_neighbourhood_store IS FALSE -- Exclude Neighbourhood Pricing
+                    AND b.is_online_store IS FALSE -- Exclude Online Pricing
+                    AND b.store_id != '9927' -- exclude Favona Cafe WWNZ pricing
+                    AND b.district_id IN ('UNI', 'LNI') -- North Island pricing only
+                    AND b.store_name NOT LIKE '%Closed%' -- Exclude closed store prcing
+                    AND b._is_current = TRUE AND c._is_current = TRUE AND u._is_current = TRUE
+                    AND c.category_description NOT IN (
+                        'CIGARETTES', 'FRONT OF STORE OTHER', 'SEASONAL FOODS', 'NEWSAGENCY',
+                        'ELECTRONIC CIGARETTES', 'SMOKING ACCESSORIES',
+                        'STATIONERY-CARDS & WRAP', 'STATIONERY-NZ POST', 'STATIONERY-SEASONAL STATIONERY'
+                    )
+                GROUP BY 1, 2, 3, 4, 5  -- Group by all non-aggregated columns, including DateSellPriceStart
+            )
     )
-
-    WHERE row_num=1
-      
+WHERE
+    row_num = 1
 )
 ,
 -- Latest Price from Wholesale

@@ -19,8 +19,10 @@ FROM
                 PARTITION BY article_id, unit_of_measure 
                 ORDER BY 
                     -- cnt DESC,                            -- Most frequent price
-                    DateSellPriceStart DESC ,               -- Tie-breaker: Most recent price start date
-                    cnt DESC                                -- Most frequent price
+                    DateSellPriceStart DESC    ,            -- Tie-breaker: Most recent price start date
+                    cnt DESC                                -- Most frequent price by store count
+
+
             ) AS row_num
         FROM
             (
@@ -28,8 +30,9 @@ FROM
                     a.Article AS article_id,
                     u.pack_size,
                     a.UoM AS unit_of_measure,
-                    a.CurrentSellPrice AS cd_retail_price,
+                    IF(a.PriceSpecificationElementTypeCode = 'VKP0', a.CurrentSellPrice,a.CurrentSellPrice) AS cd_retail_price, -- VKP0 Is standard price, when standard doesn't exist return non-standard off promo price
                     a.DateSellPriceStart,                 -- Include the date field
+                    -- a.start_dttm     ,                   
                     COUNT(a.CurrentSellPrice) AS cnt
                 FROM
                     `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_site_uom_v` AS a
@@ -44,12 +47,14 @@ FROM
                     ON a.article = u.article_id AND a.UoM = u.unit_of_measure_id
                 WHERE
                     1=1
-                    AND a.SalesOrganisation = '2010'
-                    AND a.PriceSpecificationElementTypeCode = 'VKP0'
-                    AND a.article = '221149' -- Retaining filter for testing
-                    AND b.is_countdown_metro_store IS FALSE
-                    AND b.is_countdown_neighbourhood_store IS FALSE
-                    AND b.district_id IN ('UNI', 'LNI')
+                    AND a.SalesOrganisation = '2010'  -- Woolworths NZ
+                    -- AND a.article = '503482' -- Retaining filter for testing                    
+                    AND b.is_countdown_metro_store IS FALSE -- Exclude Metro Pricing
+                    AND b.is_countdown_neighbourhood_store IS FALSE -- Exclude Neighbourhood Pricing
+                    AND b.is_online_store IS FALSE -- Exclude Online Pricing
+                    AND b.store_id != '9927' -- exclude Favona Cafe WWNZ pricing
+                    AND b.district_id IN ('UNI', 'LNI') -- North Island pricing only
+                    AND b.store_name NOT LIKE '%Closed%' -- Exclude closed store prcing
                     AND b._is_current = TRUE AND c._is_current = TRUE AND u._is_current = TRUE
                     AND c.category_description NOT IN (
                         'CIGARETTES', 'FRONT OF STORE OTHER', 'SEASONAL FOODS', 'NEWSAGENCY',
