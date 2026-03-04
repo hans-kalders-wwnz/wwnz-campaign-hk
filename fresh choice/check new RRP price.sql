@@ -159,4 +159,5 @@ FULL OUTER JOIN
 --     OR B.article_id IS NULL                  -- Rows only in Old Source (A)
 --     OR 
 --     CAST(A.cd_retail_price as FLOAT64) <> CAST(B.cd_retail_price as float64)  -- Price value mismatch
-    -- OR A.cnt <> B.cnt                        -- Price count mismatchORDER BY 1, 2
+    -- OR A.cnt <> B.cnt                        -- Price count mismatchORDER BY 1, 2.
+-- this is a new line
